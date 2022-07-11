@@ -22,7 +22,7 @@ export const removeDuplicateSlashes = (path: string) => {
     let newPath = ''
     let flip = false
 
-    for (let i = 0; i < path.length; i++) {
+    for (let i = 0; i < path.length; i++)
         if (path.charCodeAt(i) === 47) {
             if (!flip) {
                 flip = true
@@ -32,7 +32,10 @@ export const removeDuplicateSlashes = (path: string) => {
             flip = false
             if (!flip) newPath += path[i]
         }
-    }
+
+    let total = newPath.length - 1
+    if (newPath.charCodeAt(total) === 47) newPath = newPath.substring(0, total)
+    // if (newPath.charCodeAt(0) === 47) newPath = newPath.substring(1, total + 1)
 
     return newPath
 }

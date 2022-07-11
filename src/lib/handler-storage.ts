@@ -3,7 +3,6 @@ import type { Handler } from './types'
 interface HandlerObject<Store = Record<string, any>> {
     handler: Handler
     params: Record<string, any>
-    store: Store
     _createParamsObject: (
         params: string[]
     ) => Record<string, string | undefined>
@@ -18,12 +17,11 @@ export default class HandlerStorage {
         this.unconstrainedHandler = null
     }
 
-    addHandler(handler: Handler, params: string[], store: any) {
+    addHandler(handler: Handler, params: string[]) {
         const handlerObject: HandlerObject = {
             handler,
             params,
             _createParamsObject: this._compileCreateParamsObject(params),
-            store: store || null
         }
 
         this.unconstrainedHandler = handlerObject

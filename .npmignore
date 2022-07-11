@@ -1,0 +1,12 @@
+.git
+.gitignore
+.prettierrc
+.cjs.swcrc
+.es.swcrc
+
+node_modules
+tsconfig.json
+pnpm-lock.yaml
+
+example
+test

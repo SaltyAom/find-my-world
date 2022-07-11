@@ -21,7 +21,7 @@ import {
     removeHostnamePath
 } from './lib/utils'
 
-import type { HTTPMethod, FindResult, Handler } from './lib/types'
+import type { HTTPMethod, FindResult, Route, LookupResult } from './lib/types'
 
 const FULL_PATH_REGEXP = /^https?:\/\/.*?\//
 const OPTIONAL_PARAM_REGEXP = /(\/:[^/()]*?)\?(\/?)/
@@ -36,7 +36,7 @@ interface RouterConfig {
     onBadUrl?(path: string, req: Request): Response
 }
 
-export default class Router {
+export default class Router<T = any> {
     defaultRoute?: (request: Request) => Response
     onBadUrl?: (path: string, req: Request) => Response
     ignoreTrailingSlash: boolean
@@ -47,13 +47,13 @@ export default class Router {
 
     // ? Make `any[]` to make it play well with third party module
     // ? Like adding additional parameter to request
-    routes: any[]
+    routes: Route<T>[]
     trees: Record<
         string,
         StaticNode | ParentNode | ParametricNode | WildcardNode
     >
-    _routesPatterns: any[]
-    _cachedRoutes: Record<string, Handler>
+    #routesPatterns: any[]
+    #cachedRoutes: Record<string, T>
 
     constructor({
         defaultRoute,
@@ -74,19 +74,20 @@ export default class Router {
 
         this.routes = []
         this.trees = {}
-        this._routesPatterns = []
-        this._cachedRoutes = {}
+        this.#routesPatterns = []
+        this.#cachedRoutes = {}
     }
 
-    on(method: HTTPMethod, path: string, handler: Handler, store?: any) {
+    on(method: HTTPMethod, path: string, handler: T) {
         const optionalParamMatch = path.match(OPTIONAL_PARAM_REGEXP)
         if (optionalParamMatch) {
             const pathFull = path.replace(OPTIONAL_PARAM_REGEXP, '$1$2')
             const pathOptional = path.replace(OPTIONAL_PARAM_REGEXP, '$2')
 
-            this.on(method, pathFull, handler, store)
-            this.on(method, pathOptional, handler, store)
-            return
+            this.on(method, pathFull, handler)
+            this.on(method, pathOptional, handler)
+
+            return this
         }
 
         if (this.ignoreDuplicateSlashes) path = removeDuplicateSlashes(path)
@@ -95,12 +96,14 @@ export default class Router {
         const methods = Array.isArray(method) ? method : [method]
 
         for (const method of methods) {
-            this._on(method, path, handler, store)
-            this.routes.push({ method, path, handler, store })
+            this.#on(method, path, handler)
+            this.routes.push({ method, path, handler })
         }
+
+        return this
     }
 
-    _on(method: HTTPMethod, path: string, handler: Handler, store: any) {
+    #on(method: HTTPMethod, path: string, handler: T) {
         if (this.trees[method] === undefined)
             this.trees[method] = new StaticNode('/')
 
@@ -246,26 +249,36 @@ export default class Router {
 
         if (!this.caseSensitive) path = path.toLowerCase()
 
-        for (const existRoute of this._routesPatterns)
+        for (const existRoute of this.#routesPatterns)
             if (existRoute.path === path && existRoute.method === method)
                 throw new Error(
                     `Method '${method}' already declared for route '${path}'`
                 )
 
-        this._routesPatterns.push({ method, path })
+        this.#routesPatterns.push({ method, path })
 
-        currentNode.handlerStorage.addHandler(handler, params, store)
+        currentNode.handlerStorage.addHandler(handler, params)
     }
 
-    lookup(req: Request, store: Object = {}): Response {
-        var handle = this.find(req.method as HTTPMethod, req.url)
+    find(method: HTTPMethod, path: string): LookupResult {
+        const handle = this.#find(method as HTTPMethod, path)
 
-        if (!handle) return this._defaultRoute(req)
-
-        return handle.handler(req, handle.params, handle.searchParams, store)
+        if (handle)
+            return Object.assign(handle, {
+                found: true,
+                method: method as HTTPMethod
+            }) as LookupResult
+        else
+            return {
+                found: false,
+                method: method as HTTPMethod,
+                handler: this.#defaultRoute,
+                params: {},
+                query: {}
+            }
     }
 
-    find(method: HTTPMethod, path: string): FindResult | null {
+    #find(method: HTTPMethod, path: string): FindResult<T> | null {
         let currentNode = this.trees[method]
 
         if (!currentNode) return null
@@ -276,7 +289,7 @@ export default class Router {
         // This must be run before sanitizeUrl as the resulting function
         // .sliceParameter must be constructed with same URL string used
         // throughout the rest of this function.
-        if (this.ignoreDuplicateSlashes) path = removeDuplicateSlashes(path)
+        if (!this.ignoreDuplicateSlashes) path = removeDuplicateSlashes(path)
 
         let sanitizedUrl
         let querystring
@@ -288,7 +301,7 @@ export default class Router {
             querystring = sanitizedUrl.querystring
             shouldDecodeParam = sanitizedUrl.shouldDecodeParam
         } catch (error) {
-            return this._onBadUrl(path)
+            return this.#onBadUrl(path)
         }
 
         if (this.ignoreTrailingSlash) path = trimLastSlash(path)
@@ -312,9 +325,8 @@ export default class Router {
                 if (handle !== null) {
                     return {
                         handler: handle.handler,
-                        store: handle.store,
                         params: handle._createParamsObject(params),
-                        searchParams: parseQueryString(querystring)
+                        query: parseQueryString(querystring) ?? {}
                     }
                 }
             }
@@ -391,7 +403,7 @@ export default class Router {
     reset() {
         this.trees = {}
         this.routes = []
-        this._routesPatterns = []
+        this.#routesPatterns = []
     }
 
     off(method: HTTPMethod, path: string) {
@@ -425,28 +437,30 @@ export default class Router {
         if (this.ignoreTrailingSlash) path = trimLastSlash(path)
 
         const methods = Array.isArray(method) ? method : [method]
-        for (const method of methods) this._off(method, path)
+        for (const method of methods) this.#off(method, path)
+
+        return this
     }
 
-    _off(method: HTTPMethod, path: string) {
+    #off(method: HTTPMethod, path: string) {
         const newRoutes = this.routes.filter(
             (route) => method !== route.method || path !== route.path
         )
 
-        this._rebuild(newRoutes)
+        this.#rebuild(newRoutes)
     }
 
-    _rebuild(routes: typeof this.routes) {
+    #rebuild(routes: typeof this.routes) {
         this.reset()
 
         for (const route of routes) {
-            const { method, path, handler, store } = route
-            this._on(method, path, handler, store)
-            this.routes.push({ method, path, handler, store })
+            const { method, path, handler } = route
+            this.#on(method, path, handler)
+            this.routes.push({ method, path, handler })
         }
     }
 
-    _defaultRoute(request: Request) {
+    #defaultRoute(request: Request) {
         if (!this.defaultRoute)
             return new Response(undefined, {
                 status: 404
@@ -455,18 +469,20 @@ export default class Router {
         return this.defaultRoute(request)
     }
 
-    _onBadUrl(path: string): FindResult | null {
+    #onBadUrl(path: string): LookupResult | null {
         if (!this.onBadUrl) return null
 
         const onBadUrl = this.onBadUrl
 
         return {
-            handler: (req, ctx) => onBadUrl(path, req),
+            found: false,
+            method: 'GET',
+            handler: this.#defaultRoute,
             params: {},
-            store: null
+            query: {}
         }
     }
 }
 
-export type { Handler, HTTPMethod } from './lib/types'
+export type { HTTPMethod, LookupResult } from './lib/types'
 export type { ParsedUrlQuery } from 'querystring'
